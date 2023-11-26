@@ -39,8 +39,13 @@ section .bss
     krasBiasesInitialiser: resq MAX_LAYERS_COUNT
 
     ;# Fit #;
+    krasLearningRate: resq 1
     krasEpochs: resq 1
     krasBatchSize: resq 1
+
+    ;# Export #;
+
+    krasExportFileName: resq 1
 
 section .text 
 ;===========================;
@@ -109,65 +114,18 @@ section .text
     krasFit:
         mov [krasEpochs], rax 
         mov [CnnEpochs], rax 
+
+        mov qword [krasLearningRate], rbx
+        mov qword [CnnLearningRate], rbx
         call fitCnn
         ret 
 ;===========================;
 ;/\- Kras- Dev Verbosity -/\;
 ;===========================;
     krasShowWeights:
-        push rax
-        push rcx 
-        push rdx 
-        push r10 
-        push r11 
-        push r12
-        push r13
-        mov rcx, showWeightsText
-        mov rdx, SHOW_WEIGHTS_TEXT_LENGTH
-        call print
-
-        mov qword r11, [CnnLayersCount]
-        dec r11
-
-        call getWorkingCnn
-        mov r10, rax
-        
-
-        showWeightsLayerLOOP:
-            mov qword r12, [r10+3] ; store in r12 the weights' layer pointer
-
-            mov rax, r10 ; pass as argument the layer handle
-            call getLocalWeightsCount ; get the amount of weights in rax
-
-            mov r13, rax
-            call displayUnity
-
-            showWeightsWeightLOOP:
-                mov qword rax, [r12]
-                call displayFloat
-
-                add r12, 8
-                dec r13 
-                cmp r13, 0
-                jne showWeightsWeightLOOP
-
-            add r10, 19
-
-            call displaySeperator
-
-            dec r11 
-            cmp r11, 0
-            jne showWeightsLayerLOOP
-        
-        call displayHugeSeparator
-
-        pop r13
-        pop r12
-        pop r11 
-        pop r10 
-        pop rdx 
-        pop rcx
-        pop rax 
+        mov qword rbx, [CnnWeightsMatrixPointer]
+        mov qword rcx,[CnnWeightsCount]
+        call krasShowPseudoMatrix
         ret
     krasShowNeurons:
         mov rcx, showNeuronsText
@@ -176,7 +134,7 @@ section .text
 
         mov qword rbx, [CnnActivatedMatrixPointer]
         mov qword rcx, [CnnNeuronsCount]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displayHugeSeparator
         ret
@@ -187,7 +145,7 @@ section .text
 
         mov qword rbx, [CnnUnactivatedMatrixPointer]
         mov qword rcx, [CnnNeuronsCount]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displayHugeSeparator
         ret
@@ -198,7 +156,7 @@ section .text
 
         mov qword rbx, [CnnCostMatrixPointer]
         mov qword rcx, [CnnNeuronsCount]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displaySeperator
 
@@ -210,7 +168,7 @@ section .text
 
         mov qword rbx, [CnnBackpropagationWeightsMatrixPointer]
         mov qword rcx,[CnnWeightsCount]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displayHugeSeparator
         ret
@@ -221,7 +179,7 @@ section .text
 
         mov qword rbx, lossHistory
         mov qword rcx, [CnnEpochs]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displayHugeSeparator
         ret
@@ -233,7 +191,7 @@ section .text
         mov qword rbx, [CnnActivatedMatrixPointer]
         add qword rbx, [CnnLastLayerOffset]
         mov qword rcx, [CnnDataOutputSize]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displayHugeSeparator
         ret
@@ -245,7 +203,7 @@ section .text
         mov qword rbx, [CnnUnactivatedMatrixPointer]
         add qword rbx, [CnnLastLayerOffset]
         mov qword rcx, [CnnDataOutputSize]
-        call showPseudoMatrix
+        call krasShowPseudoMatrix
 
         call displaySeperator
         ret
@@ -267,6 +225,78 @@ section .text
         pop rbx 
         pop rax
         ret
+;===============================;
+;/\- Kras- Sample management -/\;
+;===============================;
+    krasCreateSample:
+        ret 
+    
+;=============================;
+;/\- Kras- File management -/\;
+;=============================;
+    krasLoadWeights:
+        mov rax, 5
+        mov rbx, [krasExportFileName]
+        mov rcx, 0 
+        mov rdx, 0o777
+        int 0x80
+
+        push rax
+ 
+        mov rbx, rax 
+        mov rax, 3
+        mov rcx, [CnnWeightsMatrixPointer]
+        mov rdx, 616
+        
+        int 0x80
+
+        pop rbx 
+        mov rax, 6
+        int 0x80
+        ret
+    krasSaveLoss:
+        mov rax, 5
+        mov rbx, [krasExportFileName]
+        mov rcx, 65 
+        mov rdx, 0o777
+        int 0x80
+
+        push rax
+ 
+        mov rbx, rax 
+        mov rax, 4 
+        mov rcx, lossHistory
+        mov rdx, 1600
+        
+        int 0x80
+
+        pop rbx 
+        mov rax, 6
+        int 0x80
+        ret
+    krasSaveWeights:
+        mov rax, 5
+        mov rbx, [krasExportFileName]
+        mov rcx, 65 
+        mov rdx, 0o777
+        int 0x80
+
+        push rax
+ 
+        mov rbx, rax 
+        mov rcx, [CnnWeightsMatrixPointer]
+        mov rdx, [CnnWeightsCount]
+        mov rax, DOUBLE_SIZE
+        mul rdx 
+        mov rdx, rax 
+        mov rax, 4
+        
+        int 0x80
+
+        pop rbx 
+        mov rax, 6
+        int 0x80
+        ret
 ;===========================;
 ;/\- Kras- Calling Macro -/\;
 ;===========================;
@@ -276,6 +306,13 @@ section .text
     mov rdx, %3
     mov rdi, %4
 %endmacro
-%macro fitParameters 1
+%macro fitParameters 2
     mov rax, %1
+    mov rbx, %2
+%endmacro
+%macro saveParameters 1
+    mov qword [krasExportFileName], %1
+%endmacro
+%macro loadParameters 1
+    mov qword [krasExportFileName], %1
 %endmacro

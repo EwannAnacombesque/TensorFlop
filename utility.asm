@@ -23,11 +23,15 @@ section .data
 
     FLOAT_DISPLAY_DECIMALS equ 4
     
+    filename db "lossDataFinish.bin",0
+
     ;# Random weights #
 
     randomHalfPart dq 0.1
     tweakedSoftMaxRoot dq 0.1 
     randomOddPart dq 1.793
+
+    floatLimit dq 9999.9998
 
     ;# Data Shortkey #;
     DOUBLE_SIZE equ 8
@@ -69,7 +73,15 @@ section .text
         int 0x80
         ret    
     displayFloat:
-       saveRegisters
+        saveRegisters
+
+        fcomp st0
+
+        fld qword [printedFloatPointer] 
+        fabs 
+        fcomp qword [floatLimit] 
+        jl tooBig
+
         mov qword [printedFloatPointer], rax; move the float to rdx
         mov rax, 1
         mov rbx, 10
@@ -91,6 +103,12 @@ section .text
 
         call displayInteger
         
+        jmp displayFloatDone
+        tooBig:
+        mov rax, 0
+        call displayUnity
+
+        displayFloatDone:
         getBackRegisters
         ret
     displayInteger:

@@ -7,13 +7,13 @@ section .data
     ;# Limitations #
     MAX_LAYERS_COUNT equ 10
     MAX_NETWORKS_COUNT equ 2
-    MAX_INDEX_LOSS_HISTORY equ 300
-    MAX_SIZE_LOSS_HISTORY equ 2400
+    MAX_INDEX_LOSS_HISTORY equ 500
+    MAX_SIZE_LOSS_HISTORY equ 4000
     MAX_IDEALS_COUNT equ 10
 
     ;# Initial constants #
     INITIAL_LEAKY_RELU_COEFFICIENT dq 0.1
-    INITIAL_LEARNING_RATE dq -0.01
+    INITIAL_LEARNING_RATE dq -0.001
         
     ;# Constants #
     TF_ZERO equ 0
@@ -28,6 +28,9 @@ section .data
     TF_TANH equ 9
     TF_SOFTMAX equ 10
     TF_NORMALIZE equ 11
+    TF_CLASSIFICATION_RADIUS equ 12 
+    TF_CLASSIFICATION_CHESSBOARD equ 13
+    TF_CLASSIFICATION_HALF equ 14
 
 section .bss 
     ;===- TENSORFLOP VARIABLES -===;
@@ -59,7 +62,8 @@ section .bss
 
     CnnFirstLayerOffset : resq 1 ; Offset of Neurons needed to propagate (skipping input neurons)
     CnnLastLayerOffset : resq 1 ; Offset of Neurons needed to backpropagate (skipping output neurons)
-
+    
+    CnnLearningRate: resq 1
     CnnEpochs : resq 1
     CnnBatchSize : resq 1
 
@@ -96,10 +100,15 @@ section .bss
     backpropInputLayerNeuronsPointer: resq 1 
     backpropInputLayerWeightsPointer: resq 1
 
-    ; CNN-Loss/Ideals 
+    ; CNN-Loss 
     
     lossHistory: resq MAX_INDEX_LOSS_HISTORY
     lossHistoryIndex: resq 1
+
+    ; CNN-Ideals / Inputs / Samples 
+
+    trainSample: resq 1
+    validationSample: resq 1
     idealsArray: resq MAX_IDEALS_COUNT
     idealsIndex: resq 1
 section .text 
@@ -202,6 +211,66 @@ section .text
         ret 
     Tanh:
         ret
+    selectDerivativeActivationFunction:
+        ; Proceed to check if it's linear
+        cmp qword [computeActivationFunction], TF_LINEAR
+        jne selectDerivativeActivationFunctionNotLinear
+
+        call ConstantFunction ; call the right function
+
+        jmp selectDerivativeActivationDone
+        selectDerivativeActivationFunctionNotLinear:
+
+        ;============================================;
+
+        ; Proceed to check if it's ReLU
+        cmp qword [computeActivationFunction], TF_RELU
+        jne selectDerivativeActivationFunctionNotReLU
+
+        call Heaviside ; call the right function
+
+        jmp selectDerivativeActivationDone
+        selectDerivativeActivationFunctionNotReLU:
+
+        ;============================================;
+        
+        ; Proceed to check if it's LeakyReLU
+        cmp qword [computeActivationFunction], TF_LEAKY_RELU
+        jne selectDerivativeActivationFunctionNotLeakyReLU
+
+        call LeakyHeaviside
+
+        jmp selectDerivativeActivationDone
+        selectDerivativeActivationFunctionNotLeakyReLU:
+
+        ;============================================;
+        
+        ; Proceed to check if it's Sigmoid
+
+        cmp qword [computeActivationFunction], TF_SIGMOID
+        jne selectDerivativeActivationFunctionNotSigmoid
+
+        call DerivativeSigmoid
+
+        jmp selectDerivativeActivationDone
+        selectDerivativeActivationFunctionNotSigmoid:
+
+        ;============================================;
+        
+        ; Proceed to check if it's Tanh
+        
+        cmp qword [computeActivationFunction], TF_TANH
+        jne selectDerivativeActivationFunctionNotTanh
+
+        call DerivativeTanh
+
+        jmp selectDerivativeActivationDone
+        selectDerivativeActivationFunctionNotTanh:
+
+        selectDerivativeActivationDone:
+        ret
+    ConstantFunction:
+        ret
     Heaviside:
         push rax ; save registers
         xor rax, rax ; prepare it 
@@ -239,6 +308,10 @@ section .text
         LeakyHeavySideDone:
 
         pop rax ; get back registers
+        ret
+    DerivativeSigmoid:
+        ret
+    DerivativeTanh:
         ret
     softMax:
         push rax ; summation sum
@@ -298,7 +371,27 @@ section .text
         pop rbx 
         pop rax
         ret
+    DerivativeSoftmax:
+        ; 1.1-Ai
+        fld1
+        fld qword [tweakedSoftMaxRoot]
+        faddp
+        fld qword [computedFloatPointer]
+        fsubp
+        fstp qword [backpropTempFloatPointerTwo]
 
+        ; 0.1 + Ai
+
+        fld qword [tweakedSoftMaxRoot]
+        fld qword [computedFloatPointer]
+        faddp 
+
+        ; Ai*(1-Ai)
+        fld qword [backpropTempFloatPointerTwo]
+        fmulp
+        fstp qword [computedFloatPointer]
+        ret
+    
     exponential:
         fcomp st0
         ; Let x a double precision float : returns e^x
@@ -422,7 +515,6 @@ section .text
         sub rax, [CnnDataOutputSize] ; Get the index of last layer
         call getOffsetFromIndex ; get the offset in bytes
         mov qword [CnnLastLayerOffset], rax
-        call displayUnity
         ret
     getDataInputAndOutputSizes:
         mov rax, [CnnLayersSizes]

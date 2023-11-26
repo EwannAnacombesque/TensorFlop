@@ -424,14 +424,23 @@ section .text
         ; sigma(i) = Act^-1(Zi)*2(Ai-I)
         ; and so (0.1+Ai)*(1.1-Ai)*2*(Ai-Ii)
 
+        mov rax, [CnnLayersCount]
+        dec rax 
+        mov rdx, DOUBLE_SIZE 
+        mul rdx 
+        mov rdx, [CnnActivationFunctions+rax]
+        mov qword [computeActivationFunction], rdx
+
         xor rdx, rdx ; loop index 
-        mov qword rcx, [CnnCostMatrixPointer]
+        mov qword rdi, [CnnCostMatrixPointer]
         mov rbx, userInputIdealArrays 
         mov qword rax, [CnnLastLayerOffset]
         add qword rax, [CnnActivatedMatrixPointer] ; go to last layer
+        mov qword rcx, [CnnLastLayerOffset]
         
-        backpropagateFirstLayerSigmasLOOP:
 
+        xor rdx, rdx 
+        backpropagateFirstLayerSigmasLOOP:            
             fcomp st0
             ; Ai-Ii
             fld qword [rax]
@@ -443,33 +452,19 @@ section .text
             faddp
             fstp qword [backpropTempFloatPointer]
 
-            ; 1.1-Ai
-            fld1
-            fld qword [tweakedSoftMaxRoot]
-            faddp
-            fld qword [rax]
-            fsubp
-            fstp qword [backpropTempFloatPointerTwo]
-
-            ; 0.1 + Ai
-
-            fld qword [tweakedSoftMaxRoot]
-            fld qword [rax]
-            faddp 
-
-            ; Ai*(1-Ai)
-            fld qword [backpropTempFloatPointerTwo]
-            fmulp
+            call backpropagateActivation
 
             ; Ai*(1-Ai) * 2*(Ai-Ii)
+            fld qword [computedFloatPointer]
             fld qword [backpropTempFloatPointer]
             fmulp
-            fstp qword [rcx]
+            fstp qword [rdi]
 
             ; LOOP STUFF
-            add rcx, DOUBLE_SIZE
+            add rdi, DOUBLE_SIZE
             add rbx, DOUBLE_SIZE
             add rax, DOUBLE_SIZE
+            add rcx, DOUBLE_SIZE
             inc rdx
             cmp rdx, [CnnDataOutputSize]
             jne backpropagateFirstLayerSigmasLOOP
@@ -534,6 +529,14 @@ section .text
             
         ret
     backpropagateSingleLayerPrepare:
+        ; Get the layer activation functon
+        mov qword rax, [backpropLayerIndex]
+        mov rdx, DOUBLE_SIZE
+        mul rdx
+        add rax, CnnActivationFunctions
+        mov r8, [rax]
+        mov [computeActivationFunction], r8
+
         ; Get the layer size 
         mov rdx, qword [backpropLayerIndex]
         mov rax, DOUBLE_SIZE
@@ -570,6 +573,8 @@ section .text
         mov qword [backpropFormerLayerBytesSize], rax 
         ret
     backpropagateSingleLayerInitialise:
+
+
         ; Get the former layer offset -> Ai-1,k'
         mov qword rax, [backpropFormerLayerIndex]
         call getNeuronsLayerByteOffset
@@ -602,8 +607,8 @@ section .text
         mov rbx, [CnnCostMatrixPointer] ; Get the {dC/dAi | H(Zi)*dC/dAi} matrix 
         add rbx, [backpropReverseNeuronsLayerByteOffset] ; Go to the right layer
 
-        mov rcx, [CnnUnactivatedMatrixPointer] ; Get the Zi matrix
-        add rcx, [backpropNeuronsLayerByteOffset] ; Go to the right layer
+        
+        mov rcx, [backpropNeuronsLayerByteOffset] ; Go to the right layer
 
         xor rax, rax ; loop index -> stop at layer size
         backpropagateSingleLayerSigmasLOOP:
@@ -611,9 +616,7 @@ section .text
 
             ; Inverse activation function -> ReLU : Heaviside 
             ;                             -> LeakyReLU : LeakyHeaviside
-            mov rdx, [rcx]
-            mov [computedFloatPointer], rdx
-            call LeakyHeaviside
+            call backpropagateActivation
 
             ; Multiply by dC/dAi to get sigma H(Zi)*dC/dAi
             fld qword [computedFloatPointer]
@@ -699,6 +702,38 @@ section .text
             jnz backpropagateCNNLOOP
 
         ret
+    backpropagateActivation:
+        push rcx
+        push rdx
+        cmp qword [computeActivationFunction], TF_SOFTMAX
+        je backpropagateActivationUseActivated
+
+        ;=======================================================================;
+        ;=============== Derivative Activation With Unactivated ================:
+        add rcx, [CnnUnactivatedMatrixPointer] ; Get the Zi matrix
+
+        mov rdx, [rcx]
+        mov [computedFloatPointer], rdx
+        call selectDerivativeActivationFunction
+
+        jmp backpropagateActivationDone 
+
+        backpropagateActivationUseActivated:
+
+        ;=====================================================================;
+        ;=============== Derivative Activation With Activated ================:
+        
+        add rcx, [CnnActivatedMatrixPointer]
+
+        mov rdx, [rcx]
+        mov [computedFloatPointer], rdx
+        call DerivativeSoftmax
+
+
+        backpropagateActivationDone:
+        pop rdx 
+        pop rcx
+        ret
     resetNeuronsCosts:
         mov rax, [CnnNeuronsCount]
         mov rbx, [CnnCostMatrixPointer]
@@ -740,7 +775,7 @@ section .text
                 fcomp st0 
 
                 ; dC/dW * learning rate
-                fld qword [INITIAL_LEARNING_RATE]
+                fld qword [CnnLearningRate]
                 fld qword [rcx]
                 fmulp
                 ; W = W-dC/dW
