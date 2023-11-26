@@ -386,7 +386,7 @@ section .text
         fld qword [computedFloatPointer]
         faddp 
 
-        ; Ai*(1-Ai)
+        ; (0.1+Ai)*(1.1-Ai)
         fld qword [backpropTempFloatPointerTwo]
         fmulp
         fstp qword [computedFloatPointer]
