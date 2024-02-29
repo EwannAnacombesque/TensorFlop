@@ -1,54 +1,64 @@
 bits 64
 
 %include "kras.asm"
-section .data 
-    customLearningRate: dq -0.0001
-    customExportLossFileName: db "lossHistory.bin",0
+section .data
+    customEpochs: dq 200
+    customBatchSize : dq 2
+    customLearningRate: dq -0.03
+    customExportLossFileName: db "mixedLossHistory.bin",0
     customExportWeightsFileName: db "myCnnWeightsSaved.bin",0
     customImportWeightsFileName: db "myCnnWeightsLoaded.bin",0
+    customExportVerificationSquareFileName: db "squareVerif20per20.bin",0
 
 section .text
     global _start
     _start:
-        
         call krasInitialise
  
         ; Add {input, dense and output} layers
-        addLayerParameters 3, TF_LINEAR, TF_NO_BIASES, TF_ZERO
+        addLayerParameters 2, TF_LINEAR, TF_NO_BIASES, TF_ZERO
         call krasAddLayer
 
-        addLayerParameters 5, TF_LEAKY_RELU, TF_NO_BIASES, TF_ZERO
+        addLayerParameters 4, TF_TANH, TF_NO_BIASES, TF_ZERO
         call krasAddLayer
 
-        addLayerParameters 8, TF_LEAKY_RELU, TF_NO_BIASES, TF_ZERO
+        addLayerParameters 9, TF_TANH , TF_NO_BIASES, TF_ZERO
         call krasAddLayer
 
-        addLayerParameters 2, TF_LEAKY_RELU, TF_NO_BIASES, TF_ZERO
+        addLayerParameters 2, TF_SOFTMAX, TF_NO_BIASES, TF_ZERO
         call krasAddLayer
-
-        addLayerParameters 3, TF_SOFTMAX, TF_NO_BIASES, TF_ZERO
-        call krasAddLayer
- 
+        
         ; Set up the CNN, by compiling it 
         call krasCompile
 
         ; Possibly load existing weights 
-        loadParameters qword customImportWeightsFileName
-        call krasLoadWeights
-
-        ; Fit it 
-        fitParameters 150, [customLearningRate]
-        call krasFit
+        ;loadParameters qword customImportWeightsFileName
+        ;call krasLoadWeights
         
-        ; Miscellaneous 
-        call krasShowLossHistory
-
+        ; Get a reference value of the initial output of the CNN
+        fitParameters 1, 1, [customLearningRate]
+        fitExtraParameters TF_TRUE
+        call krasFit
         call krasShowOutput
 
-        ; Possibly export stuff
-        saveParameters qword customExportLossFileName
-        call krasSaveLoss
+        ; Fit it 
+        fitParameters [customEpochs], [customBatchSize], [customLearningRate]
+        fitExtraParameters TF_TRUE
+        call krasFit
 
-        saveParameters qword customExportWeightsFileName
-        call krasSaveWeights
+        call krasShowOutput 
+
+        ; Miscellaneous 
+
+        call krasShowLossHistory
+
+        ; Possibly export stuff
+        ;saveParameters qword customExportLossFileName
+        ;call krasSaveLoss
+
+        ;saveParameters qword customExportWeightsFileName
+        ;call krasSaveWeights
+
+        ;saveParameters qword customExportVerificationSquareFileName
+        ;call krasSaveVerificationSquare
         call quit
