@@ -27,9 +27,17 @@ section .data
 
     ;# Random weights #
 
+    RANDOM_PRECISION dq 1000;
     randomHalfPart dq 0.1
+    randomHalf dq 0.5 
+    randomDouble dq 2.0
     tweakedSoftMaxRoot dq 0.1 
+    floatTwo: dq 2.0
+    floatMinusOne: dq -1.0
+    floatMinusTwo: dq -2.0
     randomOddPart dq 1.793
+    randomTest dq 1.2
+    dandomTest dq 1.3
 
     floatLimit dq 9999.9998
 
@@ -75,13 +83,6 @@ section .text
     displayFloat:
         saveRegisters
 
-        fcomp st0
-
-        fld qword [printedFloatPointer] 
-        fabs 
-        fcomp qword [floatLimit] 
-        jl tooBig
-
         mov qword [printedFloatPointer], rax; move the float to rdx
         mov rax, 1
         mov rbx, 10
@@ -103,12 +104,6 @@ section .text
 
         call displayInteger
         
-        jmp displayFloatDone
-        tooBig:
-        mov rax, 0
-        call displayUnity
-
-        displayFloatDone:
         getBackRegisters
         ret
     displayInteger:
@@ -272,6 +267,38 @@ section .text
         getBackRegisters
 
         ret
+    generateRandomSample:
+        saveRegisters
+        push rdi 
+
+        generateRandomSampleLOOP:
+            mov qword rcx, [RANDOM_PRECISION]
+            inc rcx
+
+            rdrand rax ; get rdm int 
+            xor rdx, rdx
+            idiv rcx ; get an int in rang [0;10^n]
+
+            dec rcx 
+            mov qword [randomFloatPointer], rdx
+            fild qword [randomFloatPointer] 
+            mov qword [randomFloatPointer], rcx
+            fild qword [randomFloatPointer]
+            fdivp
+            fld qword [randomHalf]
+            fsubp
+            fld qword [randomDouble]
+            fmulp
+            fstp qword [rbx]
+
+            add rbx, DOUBLE_SIZE
+            dec rdi 
+            cmp qword rdi, 0
+            jnz generateRandomSampleLOOP
+
+        pop rdi 
+        getBackRegisters
+        ret
     insertListAtIndex:
         push rax ; src-list length
         push rbx ; src-list pointer
@@ -307,4 +334,21 @@ section .text
         pop rbx 
         pop rax
         ret
+    showPseudoMatrix:
+        push rax 
+        push rbx
+        push rcx
 
+
+        showPseudoMatrixLOOP:
+            mov qword rax, [rbx]
+            call displayFloat
+            
+            add rbx, 8
+            dec rcx
+            cmp rcx, 0
+            jnz showPseudoMatrixLOOP
+        pop rcx
+        pop rbx 
+        pop rax
+        ret
