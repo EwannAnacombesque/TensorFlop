@@ -7,16 +7,20 @@ section .data
     ;# Limitations #
     MAX_LAYERS_COUNT equ 10
     MAX_NETWORKS_COUNT equ 2
-    MAX_INDEX_LOSS_HISTORY equ 500
-    MAX_SIZE_LOSS_HISTORY equ 4000
+    MAX_INDEX_LOSS_HISTORY equ 8000
+    MAX_SIZE_LOSS_HISTORY equ 64000
     MAX_IDEALS_COUNT equ 10
 
     ;# Initial constants #
     INITIAL_LEAKY_RELU_COEFFICIENT dq 0.1
     INITIAL_LEARNING_RATE dq -0.001
+    INITIAL_CLASSIFICATION_RADIUS_VALUE dq 0.8
+    INITIAL_VERIFICATION_SQUARE_DXY dq 0.1
         
     ;# Constants #
     TF_ZERO equ 0
+    TF_FALSE equ 0
+    TF_TRUE equ 1
     TF_NO_BIASES equ 1
     TF_USE_BIASES equ 2
     TF_RANDOM equ 3
@@ -46,19 +50,23 @@ section .bss
     CnnWeightsCount: resq 1 ; The number of weights of the current CNN
     CnnNeuronsCount: resq 1 ; The number of neurons of the current CNN
 
-    CnnDataInputSize: resq 1 ; Size (vector size) of what enters in CNN 
-    CnnDataOutputSize: resq 1 ; Size (vector size) of what comes out of CNN 
+    CnnDataInputDim: resq 1 ; Size (vector size) of what enters in CNN 
+    CnnDataOutputDim: resq 1 ; Size (vector size) of what comes out of CNN 
+    CnnDataInputSize: resq 1
+    CnnDataOutputSize: resq 1
 
-    CnnActivatedMatrixPointer: resq 1 ; A pseudo matrix of all my activated layer's neurons | Size DOUBLE_SIZE * CnnNeuronsCount
-    CnnUnactivatedMatrixPointer: resq 1 ; A pseudo matrix of all my unactivated layer's neurons | Size DOUBLE_SIZE * CnnNeuronsCount
-    CnnWeightsMatrixPointer: resq 1 ; A pseudo matrix of all my weights 
+    ;Has to be allocated;
+    CnnActivatedMatrixPointer: resq 1 ; A pseudo matrix of all the activated layer's neurons | Size DOUBLE_SIZE * CnnNeuronsCount
+    CnnUnactivatedMatrixPointer: resq 1 ; A pseudo matrix of all the unactivated layer's neurons | Size DOUBLE_SIZE * CnnNeuronsCount
+    CnnWeightsMatrixPointer: resq 1 ; A pseudo matrix of all the weights 
+    CnnBiasesMatrixPointer: resq 1 ; A pseudo matrx of all the biases
 
     CnnCostMatrixPointer: resq 1 ; 
     CnnBackpropagationWeightsMatrixPointer: resq 1;
     CnnBackpropagationBiasesMatrixPointer: resq 1;
     
     CnnActivationFunctions : resq MAX_LAYERS_COUNT ; Array of activation functions of layers created 
-    CnnLayersSizes : resq MAX_LAYERS_COUNT ; Array of sizes of my layers (in neurons)
+    CnnLayersSizes : resq MAX_LAYERS_COUNT ; Array of sizes of the layers (in neurons)
 
     CnnFirstLayerOffset : resq 1 ; Offset of Neurons needed to propagate (skipping input neurons)
     CnnLastLayerOffset : resq 1 ; Offset of Neurons needed to backpropagate (skipping output neurons)
@@ -66,6 +74,7 @@ section .bss
     CnnLearningRate: resq 1
     CnnEpochs : resq 1
     CnnBatchSize : resq 1
+    CnnStaticInput: resq 1
 
     ; CNN-Computation 
 
@@ -79,6 +88,8 @@ section .bss
 
     computedFloatPointer: resq 1 ; Commonly used for activation function, as the result and the parameter of these
     computedSoftMaxSum: resq 1 ; Summation of e^Xi of an array X, used in softMax
+    computedTanhExp: resq 1
+    computedTanhDenominator: resq 1
 
     ; CNN-Backpropagation 
 
@@ -105,12 +116,24 @@ section .bss
     lossHistory: resq MAX_INDEX_LOSS_HISTORY
     lossHistoryIndex: resq 1
 
-    ; CNN-Ideals / Inputs / Samples 
+    ; CNN-Ideals / Inputs / Samples
 
+    SampleIndex: resq 1
+
+    CnnDataInputSample: resq 1
+    inputSampleOffset: resq 1
+    inputSampleSize: resq 1
+
+    CnnDataOutputSample: resq 1
+    outputSampleOffset: resq 1
+    outputSampleSize: resq 1
+    
     trainSample: resq 1
     validationSample: resq 1
+    
     idealsArray: resq MAX_IDEALS_COUNT
     idealsIndex: resq 1
+
 section .text 
 ;============================;
 ;/\- Activation functions -/\;
@@ -210,6 +233,28 @@ section .text
     Sigmoid:
         ret 
     Tanh:
+        ; -2z 
+        fld qword [floatMinusTwo]
+        fld qword [computedFloatPointer]
+        fmulp 
+        fstp qword [computedFloatPointer]
+        ; e^-2z
+        call exponential
+
+        ; 1+e^-2z
+        fld1
+        fld qword [computedFloatPointer] 
+        faddp
+        fstp qword [computedTanhDenominator]
+
+        ; 1-e^-2z
+        fld1
+        fld qword [computedFloatPointer]
+        fsubp
+        ; 1-e^-2z / 1+e^-2z
+        fld qword [computedTanhDenominator]
+        fdivp
+        fstp qword [computedFloatPointer]
         ret
     selectDerivativeActivationFunction:
         ; Proceed to check if it's linear
@@ -312,6 +357,15 @@ section .text
     DerivativeSigmoid:
         ret
     DerivativeTanh:
+        fcomp st0 
+        call Tanh
+        fld qword [computedFloatPointer]
+        fld st0
+        fmulp 
+        fld1 
+        fxch 
+        fsubp 
+        fstp qword [computedFloatPointer]
         ret
     softMax:
         push rax ; summation sum
@@ -386,7 +440,7 @@ section .text
         fld qword [computedFloatPointer]
         faddp 
 
-        ; (0.1+Ai)*(1.1-Ai)
+        ; Ai*(1-Ai)
         fld qword [backpropTempFloatPointerTwo]
         fmulp
         fstp qword [computedFloatPointer]
@@ -398,7 +452,7 @@ section .text
         ; Actually computes (2^intX * 2^((X-intX)*log2(e)) - 1 + 1)
         fld qword [computedFloatPointer] ; load in ST0 the float
         fldl2e ; load in ST1 log2(e)
-        fmulp ; mul, pop and store in ST0
+        fmulp 
         fld st0 ; load ST0 in ST1
         frndint ; round ST0
         fxch ; swap
@@ -409,6 +463,46 @@ section .text
         fscale ; multiply by 2^ST1 
 
         fstp qword [computedFloatPointer] ; returns e^x
+        ret
+    getDistance:
+        push rbx 
+        push rdi 
+
+        fldz 
+        fstp qword [computedFloatPointer]
+
+        getDistanceDimLOOP:
+            fld qword [rbx]
+            fld st0 
+            fmulp
+            fld qword [computedFloatPointer]
+            faddp
+            fstp qword [computedFloatPointer]
+
+            add rbx, DOUBLE_SIZE
+            dec rdi 
+            cmp rdi, 0
+            jnz getDistanceDimLOOP
+
+        fld qword [computedFloatPointer]
+        fsqrt
+        fstp qword [computedFloatPointer]
+
+        pop rdi 
+        pop rbx
+        ret
+    integerPower:
+        push rbx 
+        push rcx 
+
+        mov qword rax, 1
+        integerPowerLOOP:
+            mul rbx 
+            dec rcx
+            cmp rcx, 0 
+            jnz integerPowerLOOP
+        pop rcx 
+        pop rbx  
         ret
 ;==========================;
 ;/\- Utility procedures -/\;
@@ -512,13 +606,13 @@ section .text
         ret
     getLastLayerOffset:
         mov rax, [CnnNeuronsCount] ; Amount of Neurons 
-        sub rax, [CnnDataOutputSize] ; Get the index of last layer
+        sub rax, [CnnDataOutputDim] ; Get the index of last layer
         call getOffsetFromIndex ; get the offset in bytes
         mov qword [CnnLastLayerOffset], rax
         ret
     getDataInputAndOutputSizes:
         mov rax, [CnnLayersSizes]
-        mov [CnnDataInputSize], rax
+        mov [CnnDataInputDim], rax
 
         mov rax, [CnnLayersCount]
         dec rax
@@ -526,7 +620,7 @@ section .text
         mul rdx 
         add rax, CnnLayersSizes
         mov rbx, [rax]
-        mov [CnnDataOutputSize], rbx
+        mov [CnnDataOutputDim], rbx
         ret
     getNeuronsLayerByteOffset:
         push rdx
