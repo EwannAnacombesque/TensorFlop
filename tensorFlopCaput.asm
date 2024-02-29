@@ -53,36 +53,47 @@ section .text
         ret
     predictCnn:
         ; STORE THE INPUT ;
-        mov rbx, floatTest
         call initInput
-
+        
         ; COMPUTE A PROPAGATION
         call computeCnn
         ret
     fitCnn:
-        ; STORE THE INPUT ;
-        mov rbx, floatTest
-        call initInput
-        
-        ; LOOP THE AMOUNT OF EPOCH NEEDED ;
         mov qword r11, [CnnEpochs]
+        epochLoop:
+            push r11 
+            call resetWeightGradients
+
+            call batchCnn 
+            call applyGradient
+
+            pop r11
+            dec r11 
+            cmp r11, 0
+            jnz epochLoop
+        ret
+    batchCnn:
+        ; LOOP THE AMOUNT OF BATCHSIZE NEEDED ;
+        mov qword r11, [CnnBatchSize]
         backpropagationLOOP:
             push r11
             
+            call initInput
+        
             ; Compute a single propagation
             call computeCnn
             call calculateGlobalLoss
             
             ; Compute the propagation
             call backpropagateCNN
-            
-            ; Eventually apply it
-            call applyGradient
-            
+
+            call shiftInputAndOutput
+                        
             pop r11
             dec r11 
             cmp r11, 0
             jnz backpropagationLOOP
+
         ret
 ;========================;
 ;/\-   CNN Creation   -/\;
@@ -104,18 +115,32 @@ section .text
         mov qword [lossHistoryIndex], 0
         ret
     initInput: ; Load my input (experimentals for now)
-        mov qword rax, [CnnDataInputSize]
+        mov rbx, [CnnDataInputSample]
+
+        mov qword rax, [CnnDataInputDim]
         mov qword rcx, 0
         mov qword r8, [CnnActivatedMatrixPointer]
         mov qword r9, DOUBLE_SIZE
         call insertListAtIndex
 
-        mov qword rax, [CnnDataInputSize]
+        mov qword rax, [CnnDataInputDim]
         mov qword rcx, 0
         mov qword r8, [CnnUnactivatedMatrixPointer]
         mov qword r9, DOUBLE_SIZE
         call insertListAtIndex
+
         ret
+    shiftInputAndOutput:
+        cmp qword [CnnStaticInput], TF_FALSE
+        jne shiftInputAndOutputStatic
+
+        ;mov qword rbx, [CnnDataInputSize]
+        ;add qword [CnnDataInputSample], rbx
+        ;mov qword rbx, [CnnDataOutputSize]
+        ;add qword [CnnDataOutputSample], rbx
+        
+        shiftInputAndOutputStatic:
+        ret 
     createCnnHandle: ; Create a CnnHandle and fill it with the data available
         mov rax, [CnnLayersCount] 
         mov qword [cafElements], rax ; number of layers
@@ -162,6 +187,7 @@ section .text
         mov qword [cafElements], rax ; number of weights
         mov qword [cafSize], DOUBLE_SIZE ; a weight is a db float -> 8 bytes 
         call caf
+        
         mov qword [CnnWeightsMatrixPointer], rax
         
 
@@ -228,6 +254,7 @@ section .text
         ; Get the informations we need
         ;       - first layer's neuron-count 
         ;       - a pointer to my weights
+
         mov qword rbx, [CnnWeightsMatrixPointer]; store in rbx the weight pointer
 
 
@@ -302,6 +329,8 @@ section .text
             cmp qword [computeOutputLayerSize],0
             jnz computeSingleLayerLOOP
 
+        call computeBiases
+        call computeScales
         call computeActivation
 
         ; Add to my neurons pointer, the input-layer's neuron-count times the size of an element
@@ -309,54 +338,7 @@ section .text
         
         pop rax
         ret 
-    computeActivation: ; Activate my neurons
-        push rbx 
-        push rcx
-        push rdx 
-        
-        cmp qword [computeActivationFunction], TF_SOFTMAX
-        je wholeLayerActivation
 
-        ;======================================================;
-        ;=============== Per Neuron Activation ================:
-        computeActivationLoop:
-            ; Call the activation function
-            mov rdx, [computeTempUnactivatedPointer]
-            mov rax, [rdx]
-            mov [computedFloatPointer], rax
-            call selectActivationFunction
-            mov qword rax, [computedFloatPointer]
-
-            mov [rdi], rax ; Save in activated (As) matrix
-
-            ; Update my pointers
-            add rdi, DOUBLE_SIZE
-            add qword [computeTempUnactivatedPointer], DOUBLE_SIZE
-
-            cmp [computeTempUnactivatedPointer], rcx
-            jne computeActivationLoop 
-        
-        jmp computeActivationDone
-
-        wholeLayerActivation:
-        ;======================================================;
-        ;================ Per Layer Activation ================:
-
-        mov rcx, [computeTempUnactivatedPointer]
-        mov rdx, rdi
-        mov rbx, [computeUnchangedOutputLayerSize]
-        call softMax
-
-        mov rdx, [computeUnchangedOutputLayerSize]
-        mov rax, DOUBLE_SIZE
-        mul rdx 
-        add rdi, rax
-
-        computeActivationDone:
-        pop rdx
-        pop rcx 
-        pop rbx
-        ret
     computeDotProduct: ; Dot product of two pointer, vector-size specified in rbx
         push rbx
         push rdx
@@ -407,8 +389,58 @@ section .text
         pop rdx
         pop rbx
         ret
-    
+    computeActivation: ; Activate my neurons
+        push rbx 
+        push rcx
+        push rdx 
+        
+        cmp qword [computeActivationFunction], TF_SOFTMAX
+        je wholeLayerActivation
 
+        ;======================================================;
+        ;=============== Per Neuron Activation ================:
+        computeActivationLoop:
+            ; Call the activation function
+            mov rdx, [computeTempUnactivatedPointer]
+            mov rax, [rdx]
+            mov [computedFloatPointer], rax
+            call selectActivationFunction
+            mov qword rax, [computedFloatPointer]
+
+            mov [rdi], rax ; Save in activated (As) matrix
+
+            ; Update my pointers
+            add rdi, DOUBLE_SIZE
+            add qword [computeTempUnactivatedPointer], DOUBLE_SIZE
+
+            cmp [computeTempUnactivatedPointer], rcx
+            jne computeActivationLoop 
+        
+        jmp computeActivationDone
+
+        wholeLayerActivation:
+        ;======================================================;
+        ;================ Per Layer Activation ================:
+
+        mov rcx, [computeTempUnactivatedPointer]
+        mov rdx, rdi
+        mov rbx, [computeUnchangedOutputLayerSize]
+        call softMax
+
+        mov rdx, [computeUnchangedOutputLayerSize]
+        mov rax, DOUBLE_SIZE
+        mul rdx 
+        add rdi, rax
+
+        computeActivationDone:
+        pop rdx
+        pop rcx 
+        pop rbx
+        ret
+    computeBiases:
+        ret 
+    computeScales:
+        ret 
 ;===========================;
 ;/\- CNN Backpropagation -/\;
 ;===========================;
@@ -433,7 +465,7 @@ section .text
 
         xor rdx, rdx ; loop index 
         mov qword rdi, [CnnCostMatrixPointer]
-        mov rbx, userInputIdealArrays 
+        mov rbx, [CnnDataOutputSample] 
         mov qword rax, [CnnLastLayerOffset]
         add qword rax, [CnnActivatedMatrixPointer] ; go to last layer
         mov qword rcx, [CnnLastLayerOffset]
@@ -466,13 +498,13 @@ section .text
             add rax, DOUBLE_SIZE
             add rcx, DOUBLE_SIZE
             inc rdx
-            cmp rdx, [CnnDataOutputSize]
+            cmp rdx, [CnnDataOutputDim]
             jne backpropagateFirstLayerSigmasLOOP
         
 
         mov rdi, [CnnCostMatrixPointer] ; get dC/dAi
 
-        mov rsi, [CnnDataOutputSize] ; get dC/dAi
+        mov rsi, [CnnDataOutputDim] ; get dC/dAi
         mov rax, DOUBLE_SIZE
         mul rsi 
         mov rsi, rax 
@@ -500,9 +532,12 @@ section .text
         xor rcx, rcx ; layer-local index
         backpropagateFirstLayerNeuronsLOOP:
             fcomp st0
+            
             fld qword [r8+rbx]
             fld qword [rdi]
             fmulp
+            fld qword [rax] ;
+            faddp ;
             fstp qword [rax]
 
             fld qword [rdx]
@@ -524,7 +559,7 @@ section .text
             add rdi, DOUBLE_SIZE
             
             inc rcx 
-            cmp rcx, [CnnDataOutputSize]
+            cmp rcx, [CnnDataOutputDim]
             jne backpropagateFirstLayerNeuronsLOOP
             
         ret
@@ -653,6 +688,8 @@ section .text
             fld qword [r8+rbx]
             fld qword [rdi]
             fmulp
+            fld qword [rax] ;
+            faddp ;
             fstp qword [rax]
 
             fld qword [rdx]
@@ -744,6 +781,16 @@ section .text
             cmp rax, 0
             jnz resetNeuronsCostsLOOP
         ret
+    resetWeightGradients:
+        mov rax, [CnnWeightsCount]
+        mov rbx, [CnnBackpropagationWeightsMatrixPointer]
+        resetWeightGradientsLOOP:
+            mov qword [rbx], 0
+            add rbx, DOUBLE_SIZE
+            dec rax 
+            cmp rax, 0
+            jnz resetWeightGradientsLOOP
+        ret
     applyGradient:
         mov rcx, [CnnBackpropagationWeightsMatrixPointer]; Weights gradient pointer 
         mov qword rsi, [CnnLayersCount]
@@ -795,7 +842,7 @@ section .text
         ret
     calculateGlobalLoss:
         
-        mov rcx, [CnnDataOutputSize] ; Last layer size 
+        mov rcx, [CnnDataOutputDim] ; Last layer size 
         mov r8, 0
 
         mov rax, [CnnNeuronsCount] ; Amount of Neurons 
@@ -817,12 +864,13 @@ section .text
         fstp qword [lossHistory+rcx] ; set my loss as 0
 
         xor rdx, rdx 
-
+        xor r8, r8
+        mov rbx, [CnnDataOutputSample]
         calculateGlobalLossLOOP:
             fcomp st0 
 
             fld qword [rax+rdx]
-            fld qword [userInputIdealArrays+rdx]
+            fld qword [rbx+rdx]
             fsubp 
             fld st0
             fmulp
@@ -833,7 +881,7 @@ section .text
 
             add rdx, DOUBLE_SIZE
             inc r8 
-            cmp r8, [CnnDataOutputSize]
+            cmp r8, [CnnDataOutputDim]
             jne calculateGlobalLossLOOP
         
         add qword [lossHistoryIndex], DOUBLE_SIZE
